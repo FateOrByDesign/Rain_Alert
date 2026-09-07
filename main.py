@@ -3,6 +3,8 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+# Used to load the .env data
 load_dotenv()
 
 API_KEY = os.getenv("OWM_API_KEY")
@@ -21,48 +23,72 @@ def main():
     if not API_KEY:
         print("Failed to load the .env!")
     else:
-        message = get_owm_data()
+        weather_data = {}
+        city_and_country = get_owm_data(weather_data)
+        print(city_and_country)
+        print()
+        # print the weather data
+        for item in weather_data:
+            print(f"{item} : {weather_data[item]}")
+            print()
+        # checks if it's going to rain
+        message = check_if_rain(weather_data)
+        # returns a msg to bring an umbrella or not
         send_alert_via_telegram(message)
 
-def get_starting_weather_date():
-    response = requests.get(url=f"{OWM_API_ENDPOINT}/weather", params=OWM_PARAMS)
+def check_if_rain(weather_data: dict)->str:
+    """Checks if it's going to rain and return a message to the user"""
+    for item in weather_data:
+        if weather_data[item][1] < 600:
+            return "Bring An Umbrella!"
+    return "Don't need a Umbrella run free!"
+
+def calling_owm_api(api_end_point, params):
+    """This calls the OWM API"""
+    response = requests.get(api_end_point, params=params)
     response.raise_for_status()
     data = response.json()
+    return data
+
+def formated_data_time(data):
+    """Given the data it calculates the local time in sri lanka from the unix dateandtime given"""
     timestamp = data["dt"]
     time_object = datetime.fromtimestamp(timestamp, tz=ZoneInfo("Asia/Colombo"))
     time = str(time_object).split("+")[0]
+    return time
+
+def get_starting_weather_data():
+    """ Return the current weather from the CURRENT OWM API"""
+    data = calling_owm_api(f"{OWM_API_ENDPOINT}weather", OWM_PARAMS)
+    # format  the time accordingly
+    time = formated_data_time(data)
     weather = data["weather"][0]
     return (time, weather["main"], weather["id"])
 
 
-def get_owm_data():
-    OWM_PARAMS["cnt"] = "5"
-    response = requests.get(url=f"{OWM_API_ENDPOINT}forecast", params=OWM_PARAMS)
-    response.raise_for_status()
-    data = response.json()
-    weather_data = {}
-    weather_at_start = get_starting_weather_date()
-    weather_data[weather_at_start[0]] = (weather_at_start[1], weather_at_start[2])
+def get_owm_data(weather_data: dict) -> str:
+    """ Get the weather data after the initial request by 3 hour intervals"""
+    owm_params = OWM_PARAMS.copy()
+    owm_params["cnt"] = "4"
+    data = calling_owm_api(f"{OWM_API_ENDPOINT}forecast", owm_params)
+    # get the starting time, condition and weather code on the first time the program ran
+    time, condition, weather_code = get_starting_weather_data()
+    # assign that to t weather_data dict
+    weather_data[time] = (condition, weather_code)
 
-    print(f"{data["city"]["name"]},{data["city"]["country"]}")
-    print()
+    city_country = f"{data["city"]["name"]},{data["city"]["country"]}"
 
+    # go through the list of weather by 3 hour context and add them to the weather_data dict
     data = data["list"]
     for weather_condition in data:
-        timestamp = weather_condition["dt"]
-        time_object = datetime.fromtimestamp(timestamp, tz=ZoneInfo("Asia/Colombo"))
-        time_object = str(time_object).split("+")[0]
+        time = formated_data_time(weather_condition)
         for weather in weather_condition["weather"]:
-            weather_data[time_object] = (weather["main"], weather["id"])
+            weather_data[time] = (weather["main"], weather["id"])
 
-    # print the day/time and the weather condition
-    for item in weather_data:
-        print(f"{item} : {weather_data[item]}")
-        print()
+    return city_country
 
-    for item in weather_data:
-        if weather_data[item][1] < 600:
-            return "Bring An Umbrella!"
+    # if everything was successful then return the city name and country code
+
 
 def send_alert_via_telegram(message):
     params = {
@@ -70,10 +96,11 @@ def send_alert_via_telegram(message):
         "text" : message,
     }
     response = requests.get(url=TELEGRAM_ENDPOINT, params=params)
-    response.raise_for_status()
     if response.status_code != 200:
         print("Couldn't Send message via Telegram")
+        response.raise_for_status()
     else:
         print("Message was sent successfully.")
+
 
 main()
